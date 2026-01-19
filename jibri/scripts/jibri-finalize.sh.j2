@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Jibri finalize script - uploads recordings to S3
+set -euo pipefail
+trap 'echo "[finalize] interrupted" >&2' INT TERM
+
+export RCLONE_CONFIG=/etc/jibri/rclone.conf
+
+REC_DIR="${1:-}"
+if [[ -z "${REC_DIR}" || ! -d "${REC_DIR}" ]]; then
+  echo "Not a recording directory: ${REC_DIR}" >&2
+  exit 1
+fi
+
+BUCKET="{{ storage_bucket }}"
+REMOTE="hetzner-s3:${BUCKET}"
+DATE_PREFIX="$(date -u +'%Y/%m/%d')"
+BASE="$(basename "${REC_DIR}")"
+DEST_PREFIX="incoming/${DATE_PREFIX}/${BASE}"
+
+echo "Uploading ${REC_DIR} -> s3://${BUCKET}/${DEST_PREFIX}/"
+
+rclone copy "${REC_DIR}" "${REMOTE}/${DEST_PREFIX}" \
+  --checkers=8 \
+  --transfers=4 \
+  --retries=3 \
+  --low-level-retries=10
+
+# Create .done marker file
+tmpdone="$(mktemp)"
+printf '{"ts":"%s","dir":"%s"}' "$(date -u +%FT%TZ)" "${BASE}" > "$tmpdone"
+rclone copyto "$tmpdone" "${REMOTE}/${DEST_PREFIX}/.done"
+rm -f "$tmpdone"
+
+# Clean up local recording
+rm -rf --one-file-system "${REC_DIR}"
+
+echo "Upload complete"

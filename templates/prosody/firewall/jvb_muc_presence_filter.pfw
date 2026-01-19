@@ -1,0 +1,8 @@
+FROM: jvbbrewery@muc.{{ tech_domain }}
+TO: <jvb*>@{{ tech_domain }}
+KIND: presence
+# Seems safer to allow all "unavailable" to pass
+TYPE: available
+# Allow self-presence (code=110)
+NOT INSPECT: {http://jabber.org/protocol/muc#user}x/status@code=110
+DROP.

@@ -1,0 +1,66 @@
+jibri {
+  id = ""
+  single-use-mode = false
+
+  api {
+    xmpp {
+      environments = [
+        {
+          name = "prod"
+          xmpp-server-hosts = [ "{{ jitsi_hostname }}" ]
+          xmpp-domain = "{{ jitsi_domain }}"
+          base-url = "https://{{ jitsi_hostname }}"
+
+          control-muc {
+            domain = "internal.auth.{{ jitsi_domain }}"
+            room-name = "JibriBrewery"
+            nickname = "{{ jibri_nick }}"
+          }
+
+          control-login {
+            domain = "auth.{{ jitsi_domain }}"
+            username = "{{ jibri_user }}"
+            password = "{{ jibri_password }}"
+          }
+
+          call-login {
+            domain = "recorder.{{ jitsi_domain }}"
+            username = "{{ recorder_user }}"
+            password = "{{ recorder_password }}"
+          }
+
+          strip-from-room-domain = "conference."
+          usage-timeout = 0
+          trust-all-xmpp-certs = true
+        }
+      ]
+    }
+  }
+
+  recording {
+    recordings-directory = "/srv/recordings"
+    finalize-script = "/usr/local/sbin/jibri-finalize-upload.sh"
+  }
+
+  call-status-checks {
+    enable-media-detection = false
+  }
+
+  streaming { }
+
+  chrome {
+    flags = [
+      "--use-fake-ui-for-media-stream",
+      "--window-size=320x240",
+      "--autoplay-policy=no-user-gesture-required",
+      "--no-sandbox",
+      "--use-gl=egl",
+      "--disable-dev-shm-usage",
+      "--force-color-profile=srgb",
+      "--disable-gpu",
+      "--disable-software-rasterizer"
+    ]
+    binary = "/usr/bin/google-chrome"
+    driver-path = "/usr/local/bin/chromedriver"
+  }
+}

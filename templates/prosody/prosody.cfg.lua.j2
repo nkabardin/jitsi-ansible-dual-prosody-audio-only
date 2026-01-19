@@ -1,0 +1,102 @@
+-- Prosody Configuration for Jitsi Meet (Dual-Prosody Architecture)
+-- Main Prosody instance - handles client connections on port 5222
+-- See https://prosody.im/doc/configure for more information
+
+network_backend = "epoll"
+
+network_settings = {
+    tcp_backlog = 1024;
+}
+
+gc = {
+    mode = "incremental";
+    threshold = 400, speed = 250, step_size = 13;
+}
+
+---------- Server-wide settings ----------
+
+admins = { }
+
+plugin_paths = {
+    "/usr/local/lib/prosody/modules",
+    "/usr/share/jitsi-meet/prosody-plugins/"
+}
+
+modules_enabled = {
+    -- Generally required
+    "disco";
+    "roster";
+    "saslauth";
+    "tls";
+
+    -- Not essential, but recommended
+    "blocklist";
+    "private";
+    "smacks";
+
+    -- Nice to have
+    "csi_simple";
+    "firewall";
+    "ping";
+    "register";
+    "time";
+    "uptime";
+    "version";
+
+    -- Admin interfaces
+    "admin_adhoc";
+    "admin_shell";
+
+    -- HTTP modules
+    "websocket";
+
+    -- Other specific functionality
+    "posix";
+}
+
+firewall_scripts = {
+    "/etc/prosody/firewall/priority-and-antiflood.pfw";
+    "/etc/prosody/firewall/jvb_muc_presence_filter.pfw"
+}
+
+modules_disabled = {
+}
+
+pidfile = "/run/prosody/prosody.pid";
+
+s2s_secure_auth = true
+
+-- Rate limits for large conferences
+limits = {
+    c2s =    { rate = "150kb/s"; burst = "5s"; };
+    s2sin =  { rate = "80kb/s"; burst = "10s"; };
+    s2sout = { rate = "80kb/s"; burst = "10s"; };
+    component = { rate = "120kb/s"; burst = "15s"; };
+}
+
+unlimited_jids = {
+    "focus@auth.{{ jitsi_domain }}";
+    "jvb@auth.{{ jitsi_domain }}";
+{% if jibri_enabled | default(false) %}
+    "jibri@auth.{{ jitsi_domain }}";
+{% endif %}
+}
+
+authentication = "internal_hashed"
+
+archive_expires_after = "1w"
+
+log = {
+    info = "/var/log/prosody/prosody.log";
+    error = "/var/log/prosody/prosody.err";
+    { levels = { "error" }; to = "syslog"; };
+}
+
+certificates = "certs"
+
+----------- Virtual hosts -----------
+
+VirtualHost "localhost"
+
+------ Additional config files ------
+Include "conf.d/*.cfg.lua"

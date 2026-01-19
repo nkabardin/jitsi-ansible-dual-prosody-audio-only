@@ -1,0 +1,5 @@
+::preroute
+KIND: iq
+TYPE: get
+PAYLOAD: urn:xmpp:ping
+PASS.

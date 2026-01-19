@@ -1,0 +1,268 @@
+/* eslint-disable comma-dangle, no-unused-vars, no-var, prefer-template, vars-on-top */
+
+/*
+ * Jitsi Meet Configuration - Audio-Only Mode
+ * Optimized for 300+ concurrent audio participants
+ * Part of the Dual-Prosody architecture
+ */
+
+var subdir = '<!--# echo var="subdir" default="" -->';
+var subdomain = '<!--# echo var="subdomain" default="" -->';
+
+if (subdomain) {
+    subdomain = subdomain.substr(0, subdomain.length - 1).split('.')
+        .join('_')
+        .toLowerCase() + '.';
+}
+
+if (subdir.startsWith('<!--')) {
+    subdir = '';
+}
+if (subdomain.startsWith('<!--')) {
+    subdomain = '';
+}
+
+var enableJaaS = false;
+
+var config = {
+    // Connection settings
+    hosts: {
+        domain: '{{ jitsi_domain }}',
+        anonymousdomain: 'guest.{{ jitsi_domain }}',
+        muc: 'conference.' + subdomain + '{{ jitsi_domain }}',
+    },
+
+    bosh: 'https://{{ jitsi_domain }}/' + subdir + 'http-bind',
+    websocket: 'wss://{{ jitsi_domain }}/' + subdir + 'xmpp-websocket',
+    openBridgeChannel: 'websocket',
+
+    bridgeChannel: {
+    },
+
+    testing: {
+    },
+
+    // Disable reactions (saves bandwidth)
+    disableReactions: true,
+
+    // Audio settings
+    enableNoAudioDetection: true,
+    enableNoisyMicDetection: true,
+    startAudioMuted: 1,
+    startWithAudioMuted: true,
+    enableAVModeration: true,
+    audioModeration: { enabled: true },
+    videoModeration: { enabled: true },
+
+    // ============================================
+    // AUDIO-ONLY OPTIMIZATION SETTINGS
+    // ============================================
+    // These settings disable video at all levels to maximize
+    // the number of concurrent audio participants
+
+    // Video constraints set to zero - no video capture
+    constraints: {
+       video: { height: { ideal: 0, max: 0 }, width: { ideal: 0, max: 0 }, frameRate: { max: 0 } }
+    },
+    disableH264: true,
+    preferredCodec: 'VP8',
+
+    // Disable all video features
+    disableVideo: true,
+    disableVideoInput: true,
+    startVideoMuted: 1,
+    disableDesktopSharing: true,
+    startWithVideoMuted: true,
+
+    // ============================================
+
+    disableVideoForGuests: false,
+
+{% if jibri_enabled | default(false) %}
+    // Recording configuration (Jibri)
+    recordings: {
+        recordAudioAndVideo: true,
+        requireConsent: false,
+        skipConsentInMeeting: true,
+    },
+
+    recordingService: {
+        enabled: true,
+        sharingEnabled: false,
+        hideStorageWarning: true,
+    },
+
+    localRecording: {
+        disable: true,
+        notifyAllParticipants: false,
+    },
+{% else %}
+    recordings: {
+        recordAudioAndVideo: false,
+    },
+
+    recordingService: {
+        enabled: false,
+    },
+
+    localRecording: {
+        disable: true,
+    },
+{% endif %}
+
+    liveStreaming: {
+        enabled: false,
+    },
+    liveStreamingEnabled: false,
+
+    // Channel last-n: 0 means no video tiles (audio-only)
+    channelLastN: 0,
+
+    // Video quality settings zeroed out for audio-only
+    videoQuality: { maxBitratesVideo: { low: 0, standard: 0, high: 0 } },
+
+    // Require display name
+    requireDisplayName: true,
+
+    // Default language
+    defaultLanguage: '{{ default_language | default("en") }}',
+
+{% if notice_message is defined %}
+    noticeMessage: '{{ notice_message }}',
+{% endif %}
+
+    // Toolbar buttons for audio-only mode
+    toolbarButtons: [
+        'camera',
+        'chat',
+        'filmstrip',
+        'fullscreen',
+        'overflowmenu',
+        'hangup',
+        'help',
+        'microphone',
+        'participants-pane',
+        'profile',
+        'raisehand',
+{% if jibri_enabled | default(false) %}
+        'recording',
+{% endif %}
+        'settings',
+        'tileview',
+    ],
+
+    // P2P disabled for large conferences
+    p2p: {
+        enabled: false,
+        stunServers: [
+            { urls: 'stun:meet-jit-si-turnrelay.jitsi.net:443' },
+        ],
+    },
+
+    // Disable connection indicators (reduces traffic)
+    disableConnectionIndicator: true,
+    enableStatsID: false,
+    enableDisplayNameInStats: false,
+    disableThirdPartyRequests: true,
+
+    analytics: {
+    },
+
+    deploymentInfo: {
+        userRegion: "{{ jvb_region }}",
+    },
+
+    // Disable most sounds for large conferences
+    disabledSounds: [
+        'PARTICIPANT_JOINED_SOUND',
+        'PARTICIPANT_LEFT_SOUND',
+        'RAISE_HAND_SOUND',
+        'INCOMING_MSG_SOUND',
+        'REACTION_SOUND',
+        'RECORDING_ON_SOUND',
+        'RECORDING_OFF_SOUND',
+    ],
+
+{% if jibri_enabled | default(false) %}
+    hiddenDomain: 'recorder.{{ jitsi_domain }}',
+{% endif %}
+
+    mouseMoveCallbackInterval: 1000,
+
+    // Reduced notifications for large conferences
+    notifications: [
+        'connection.CONNFAIL',
+        'dialog.kickTitle',
+        'dialog.liveStreaming',
+        'dialog.lockTitle',
+        'dialog.maxUsersLimitReached',
+        'dialog.micNotSendingData',
+        'dialog.passwordNotSupportedTitle',
+        'dialog.recording',
+        'dialog.remoteControlTitle',
+        'dialog.reservationError',
+        'dialog.screenSharingFailedTitle',
+        'dialog.serviceUnavailable',
+        'dialog.sessTerminated',
+        'dialog.sessionRestarted',
+        'dialog.tokenAuthFailed',
+        'dialog.tokenAuthFailedWithReasons',
+        'dialog.transcribing',
+        'dialOut.statusMessage',
+        'liveStreaming.busy',
+        'liveStreaming.failedToStart',
+        'liveStreaming.unavailableTitle',
+        'lobby.joinRejectedMessage',
+        'lobby.notificationTitle',
+        'notify.audioUnmuteBlockedTitle',
+        'notify.chatMessages',
+        'notify.dataChannelClosed',
+        'notify.hostAskedUnmute',
+        'notify.kickParticipant',
+        'notify.localRecordingStarted',
+        'notify.localRecordingStopped',
+        'notify.moderationInEffectCSTitle',
+        'notify.moderationInEffectTitle',
+        'notify.moderationInEffectVideoTitle',
+        'notify.moderator',
+        'notify.mutedRemotelyTitle',
+        'notify.mutedTitle',
+        'notify.newDeviceAudioTitle',
+        'notify.newDeviceCameraTitle',
+        'notify.noiseSuppressionFailedTitle',
+        'notify.participantWantsToJoin',
+        'notify.participantsWantToJoin',
+        'notify.passwordRemovedRemotely',
+        'notify.passwordSetRemotely',
+        'notify.screenShareNoAudio',
+        'notify.screenSharingAudioOnlyTitle',
+        'notify.selfViewTitle',
+        'notify.suboptimalExperienceTitle',
+        'notify.unmute',
+        'notify.videoMutedRemotelyTitle',
+        'notify.videoUnmuteBlockedTitle',
+        'prejoin.errorDialOut',
+        'prejoin.errorDialOutDisconnected',
+        'prejoin.errorDialOutFailed',
+        'prejoin.errorDialOutStatus',
+        'prejoin.errorStatusCode',
+        'prejoin.errorValidation',
+        'recording.busy',
+        'recording.failedToStart',
+        'recording.unavailableTitle',
+        'toolbar.noAudioSignalTitle',
+        'toolbar.noisyAudioInputTitle',
+        'toolbar.talkWhileMutedPopup',
+        'transcribing.failed',
+    ],
+
+    filmstrip: {
+        stageFilmstripParticipants: 6,
+    },
+};
+
+if (enableJaaS) {
+    config.dialInNumbersUrl = 'https://conference-mapper.jitsi.net/v1/access/dids';
+    config.dialInConfCodeUrl = 'https://conference-mapper.jitsi.net/v1/access';
+    config.roomPasswordNumberOfDigits = 10;
+}

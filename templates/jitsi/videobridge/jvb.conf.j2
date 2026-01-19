@@ -1,0 +1,76 @@
+# Jitsi Videobridge Configuration for Dual-Prosody Architecture
+# Connects to Prosody-JVB on port 15222
+
+videobridge {
+    stats {
+      enabled = true
+      transports = [
+        { type = "muc" }
+      ]
+    }
+
+    http-servers {
+        private {
+            host = "0.0.0.0"
+            port = 8080
+        }
+        public {
+            port = 9090
+        }
+    }
+
+    websockets {
+        enabled = true
+        domain = "{{ jitsi_domain }}:443"
+        tls = true
+    }
+
+    # Audio-only optimization: disable video support
+    video {
+        enabled = false
+    }
+
+    cc {
+      max-time-between-calculations = 5 seconds
+      bwe-change-threshold = 0.1
+      padding-period = 10ms
+      jvb-last-n = -1
+      trust-bwe = false
+    }
+
+    apis {
+      xmpp-client {
+        configs {
+          # Connect to Prosody-JVB (port 15222) for internal communication
+          tech {
+            HOSTNAME = "{{ jvb_xmpp_hostname }}"
+            PORT = 15222
+            DOMAIN = "{{ tech_domain }}"
+            USERNAME = {{ jvb_user }}
+            PASSWORD = {{ jvb_password }}
+            MUC_JIDS = "{{ jvb_xmpp_muc_jids }}"
+            MUC_NICKNAME = {{ jvb_relay_id }}
+            DISABLE_CERTIFICATE_VERIFICATION = true
+          }
+        }
+      }
+      rest {
+        enabled = true
+      }
+    }
+
+    relay {
+      enabled = true
+      region = "{{ jvb_region }}"
+      relay-id = "{{ jvb_relay_id }}"
+    }
+
+    region = "{{ jvb_region }}"
+
+    ice {
+      udp {
+        bind-address = "0.0.0.0"
+        port = 10000
+      }
+    }
+}

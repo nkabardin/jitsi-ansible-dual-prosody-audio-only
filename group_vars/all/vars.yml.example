@@ -1,0 +1,46 @@
+# Group Variables Example
+# Copy to vars.yml and customize
+# These can also be defined in inventory.yml
+
+# Domain configuration
+jitsi_domain: "jitsi.example.com"
+tech_domain: "tech.{{ jitsi_domain }}"
+admin_email: "admin@example.com"
+
+# Secrets - generate with scripts/generate-secrets.sh
+jvb_secret: "CHANGE_ME"
+jvb_password: "CHANGE_ME"
+jicofo_password: "CHANGE_ME"
+turn_secret: "CHANGE_ME"
+
+# Package versions
+jicofo_version: "1.0-1104-1"
+videobridge_version: "2.3-183-g28c-1"
+jitsi_meet_version: "2.0.9910-1"
+
+# JVB configuration
+jvb_user: "jvb"
+jvb_relay_id: "jvb1"
+jvb_region: "default"
+jvb_xmpp_hostname: "{{ jitsi_domain }}"
+jvb_xmpp_domain: "{{ tech_domain }}"
+jvb_xmpp_muc_jids: "jvbbrewery@muc.{{ tech_domain }}"
+max_bridge_participants: 220
+
+# Optional: Monitoring
+monitoring_ip: "127.0.0.1"
+
+# Optional: UI Customization
+default_language: "en"
+# notice_message: "Welcome!"
+
+# Optional: Jibri
+jibri_enabled: false
+# jibri_password: "CHANGE_ME"
+# recorder_password: "CHANGE_ME"
+
+# Optional: S3 Storage (for Jibri recordings)
+# storage_access_key: "YOUR_ACCESS_KEY"
+# storage_secret_key: "YOUR_SECRET_KEY"
+# storage_bucket: "jitsi-recordings"
+# storage_endpoint: "s3.example.com"

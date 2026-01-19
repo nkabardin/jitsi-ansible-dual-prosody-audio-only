@@ -1,0 +1,118 @@
+# Jitsi Meet Inventory Configuration
+# Copy this file to inventory.yml and customize for your deployment
+# Run: cp inventory.yml.example inventory.yml
+
+all:
+  vars:
+    # ===========================================
+    # REQUIRED: Domain Configuration
+    # ===========================================
+    jitsi_domain: "jitsi.example.com"
+    tech_domain: "tech.{{ jitsi_domain }}"
+
+    # Admin email for Let's Encrypt certificates
+    admin_email: "admin@example.com"
+
+    # ===========================================
+    # REQUIRED: Generate these with scripts/generate-secrets.sh
+    # ===========================================
+    jvb_secret: "CHANGE_ME_GENERATE_RANDOM"
+    jvb_password: "CHANGE_ME_GENERATE_RANDOM"
+    jicofo_password: "CHANGE_ME_GENERATE_RANDOM"
+    turn_secret: "CHANGE_ME_GENERATE_RANDOM"
+
+    # ===========================================
+    # Package Versions (check https://download.jitsi.org for latest)
+    # ===========================================
+    jicofo_version: "1.0-1104-1"
+    videobridge_version: "2.3-183-g28c location-1"
+    jitsi_meet_version: "2.0.9910-1"
+
+    # ===========================================
+    # JVB Configuration
+    # ===========================================
+    jvb_user: "jvb"
+    jvb_relay_id: "jvb1"
+    jvb_region: "default"
+    jvb_xmpp_hostname: "{{ jitsi_domain }}"
+    jvb_xmpp_domain: "{{ tech_domain }}"
+    jvb_xmpp_muc_jids: "jvbbrewery@muc.{{ tech_domain }}"
+
+    # Max participants per JVB (tune based on server resources)
+    max_bridge_participants: 220
+
+    # ===========================================
+    # Optional: Monitoring
+    # ===========================================
+    monitoring_ip: "127.0.0.1"
+
+    # ===========================================
+    # Optional: UI Customization
+    # ===========================================
+    default_language: "en"
+    # notice_message: "Welcome to our audio conference!"
+
+    # ===========================================
+    # Optional: Jibri Recording
+    # ===========================================
+    jibri_enabled: false
+    # jibri_password: "CHANGE_ME_GENERATE_RANDOM"
+    # recorder_password: "CHANGE_ME_GENERATE_RANDOM"
+
+    # S3 Storage for recordings (if using Jibri)
+    # storage_access_key: "YOUR_S3_ACCESS_KEY"
+    # storage_secret_key: "YOUR_S3_SECRET_KEY"
+    # storage_bucket: "jitsi-recordings"
+    # storage_endpoint: "s3.example.com"
+
+  children:
+    # ===========================================
+    # Main Jitsi Meet Server
+    # ===========================================
+    jitsi_servers:
+      hosts:
+        jitsi-main:
+          ansible_host: 192.168.1.10
+          ansible_user: root
+          # ansible_ssh_private_key_file: ~/.ssh/id_rsa
+
+          # Server-specific JVB settings
+          jvb_relay_id: "jvb-main"
+          jvb_region: "default"
+
+    # ===========================================
+    # Additional Videobridge Servers (Optional)
+    # Scale by adding more JVB servers for large conferences
+    # ===========================================
+    videobridge_servers:
+      hosts:
+        # Uncomment and customize to add additional JVB servers
+        # jvb-eu:
+        #   ansible_host: 192.168.1.11
+        #   ansible_user: root
+        #   jvb_relay_id: "jvb-eu"
+        #   jvb_region: "eu"
+        #   jitsi_server_ip: 192.168.1.10  # IP of main Jitsi server
+
+        # jvb-us:
+        #   ansible_host: 192.168.1.12
+        #   ansible_user: root
+        #   jvb_relay_id: "jvb-us"
+        #   jvb_region: "us"
+        #   jitsi_server_ip: 192.168.1.10
+
+    # ===========================================
+    # Jibri Recording Servers (Optional)
+    # ===========================================
+    jibri_servers:
+      hosts:
+        # Uncomment and customize to add Jibri servers
+        # jibri-1:
+        #   ansible_host: 192.168.1.20
+        #   ansible_user: root
+        #   jibri_nick: "jibri-1"
+        #   jibri_user: "jibri"
+        #   jibri_password: "{{ jibri_password }}"
+        #   recorder_user: "recorder"
+        #   recorder_password: "{{ recorder_password }}"
+        #   jitsi_hostname: "{{ jitsi_domain }}"

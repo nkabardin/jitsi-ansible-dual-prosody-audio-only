@@ -1,0 +1,49 @@
+# Ansible
+inventory.yml
+group_vars/all/vars.yml
+*.retry
+
+# Secrets and credentials
+*.pem
+*.key
+*.crt
+*.p12
+secrets.yml
+vault.yml
+.vault_pass
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+venv/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Ansible facts cache
+.ansible/
+facts_cache/
+
+# SSH
+*.pub
+
+# Backup files
+*.bak
+*.backup

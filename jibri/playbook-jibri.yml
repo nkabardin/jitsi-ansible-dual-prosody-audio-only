@@ -1,0 +1,348 @@
+---
+- name: Setup Jibri server for recording
+  hosts: jibri_servers
+  become: yes
+  gather_facts: yes
+
+  vars:
+    prometheus_ip: "{{ monitoring_ip | default('127.0.0.1') }}"
+    recordings_dir: "/srv/recordings"
+
+  pre_tasks:
+    - name: Verify required variables
+      assert:
+        that:
+          - jibri_nick is defined
+          - jibri_user is defined
+          - jibri_password is defined
+          - recorder_user is defined
+          - recorder_password is defined
+          - jitsi_domain is defined
+          - jitsi_hostname is defined
+        fail_msg: "Required variables not defined. Please check inventory.yml"
+        success_msg: "All required variables are defined"
+
+  handlers:
+    - name: restart prometheus-node-exporter
+      systemd:
+        name: prometheus-node-exporter
+        state: restarted
+        daemon_reload: yes
+
+    - name: restart jibri
+      systemd:
+        name: jibri
+        state: restarted
+        daemon_reload: yes
+
+  tasks:
+    - name: Update package list
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: no
+      loop:
+        - curl
+        - wget
+        - gnupg
+        - ca-certificates
+        - apt-transport-https
+        - software-properties-common
+        - default-jre-headless
+        - ffmpeg
+        - pulseaudio
+        - alsa-utils
+        - xdotool
+        - openbox
+        - libnss3
+        - unzip
+        - xvfb
+        - x11vnc
+      ignore_errors: true
+
+    # Install rclone for S3 uploads
+    - name: Check if rclone is installed
+      command: which rclone
+      register: rclone_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install rclone
+      shell: |
+        curl -fsSL https://rclone.org/install.sh | bash
+      when: rclone_check.rc != 0
+      ignore_errors: true
+
+    # Jitsi repository
+    - name: Create keyrings directory
+      file:
+        path: /usr/share/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Jitsi GPG key
+      shell: |
+        curl -fsSL https://download.jitsi.org/jitsi-key.gpg.key | gpg --dearmor > /usr/share/keyrings/jitsi-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/jitsi-keyring.gpg
+
+    - name: Add Jitsi repository
+      apt_repository:
+        repo: 'deb [signed-by=/usr/share/keyrings/jitsi-keyring.gpg] https://download.jitsi.org stable/'
+        state: present
+        filename: jitsi-stable
+
+    - name: Update package list after adding repository
+      apt:
+        update_cache: yes
+
+    # Install Chrome
+    - name: Download Chrome
+      get_url:
+        url: https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+        dest: /tmp/chrome.deb
+        mode: '0644'
+
+    - name: Install Chrome
+      apt:
+        deb: /tmp/chrome.deb
+        state: present
+        update_cache: no
+      ignore_errors: true
+
+    # Install Jibri
+    - name: Install Jibri
+      apt:
+        name: jibri
+        state: present
+        update_cache: no
+        dpkg_options: 'force-confdef,force-confold'
+
+    # User setup
+    - name: Create jibri user
+      user:
+        name: jibri
+        create_home: yes
+        groups: adm,audio,video,plugdev
+        append: yes
+        state: present
+
+    - name: Create recordings directory
+      file:
+        path: "{{ recordings_dir }}"
+        state: directory
+        mode: '0755'
+        owner: jibri
+        group: jibri
+
+    # Jibri configuration
+    - name: Create jibri configuration directory
+      file:
+        path: /etc/jitsi/jibri
+        state: directory
+        mode: '0755'
+
+    - name: Deploy jibri configuration
+      template:
+        src: "{{ playbook_dir }}/templates/jibri.conf.j2"
+        dest: /etc/jitsi/jibri/jibri.conf
+        mode: '0644'
+        owner: root
+        group: root
+      notify: restart jibri
+
+    # Systemd override
+    - name: Create systemd override directory
+      file:
+        path: /etc/systemd/system/jibri.service.d
+        state: directory
+        mode: '0755'
+
+    - name: Deploy systemd override
+      copy:
+        dest: /etc/systemd/system/jibri.service.d/override.conf
+        content: |
+          [Service]
+          Environment="SCREEN_RESOLUTION=320x240"
+          LimitNOFILE=65536
+          LimitNPROC=65536
+        mode: '0644'
+
+    # Sysctl settings
+    - name: Deploy sysctl configuration
+      copy:
+        dest: /etc/sysctl.d/99-jibri.conf
+        content: |
+          # Jibri sysctl optimizations
+          fs.inotify.max_user_watches=524288
+          fs.file-max=2097152
+          vm.swappiness=10
+        mode: '0644'
+
+    - name: Apply sysctl settings
+      command: sysctl --system
+      changed_when: false
+
+    # Swap file
+    - name: Check for swap file
+      stat:
+        path: /swapfile
+      register: swapfile_stat
+
+    - name: Create swap file (8GB)
+      shell: |
+        fallocate -l 8G /swapfile
+        chmod 600 /swapfile
+        mkswap /swapfile
+        swapon /swapfile
+        echo "/swapfile none swap sw 0 0" >> /etc/fstab
+      args:
+        creates: /swapfile
+      when: not swapfile_stat.stat.exists
+
+    # ChromeDriver
+    - name: Deploy ChromeDriver install script
+      template:
+        src: "{{ playbook_dir }}/scripts/install-chromedriver.sh.j2"
+        dest: /usr/local/sbin/install-chromedriver.sh
+        mode: '0755'
+
+    - name: Install ChromeDriver
+      command: /usr/local/sbin/install-chromedriver.sh
+      changed_when: true
+
+    # ALSA loopback
+    - name: Install kernel modules for ALSA loopback
+      apt:
+        name: "linux-modules-extra-{{ ansible_kernel }}"
+        state: present
+        update_cache: no
+      ignore_errors: true
+
+    - name: Load snd-aloop module
+      modprobe:
+        name: snd-aloop
+        state: present
+
+    - name: Add snd-aloop to autoload
+      lineinfile:
+        path: /etc/modules-load.d/snd-aloop.conf
+        line: snd-aloop
+        create: yes
+        mode: '0644'
+
+    - name: Deploy ALSA configuration
+      copy:
+        dest: /etc/asound.conf
+        content: |
+          # ALSA loopback configuration for Jibri
+          pcm.!default {
+            type plug
+            slave {
+              pcm "hw:Loopback,0,0"
+            }
+          }
+        mode: '0644'
+
+    # rclone configuration for S3 uploads
+    - name: Create rclone config directory
+      file:
+        path: /etc/jibri
+        state: directory
+        mode: '0755'
+
+    - name: Deploy rclone configuration
+      template:
+        src: "{{ playbook_dir }}/templates/rclone.conf.j2"
+        dest: /etc/jibri/rclone.conf
+        mode: '0600'
+        owner: jibri
+        group: jibri
+      when: storage_access_key is defined
+
+    # Finalize script
+    - name: Deploy finalize script
+      template:
+        src: "{{ playbook_dir }}/scripts/jibri-finalize.sh.j2"
+        dest: /usr/local/sbin/jibri-finalize-upload.sh
+        mode: '0755'
+
+    # Start services
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start jibri
+      systemd:
+        name: jibri
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    # UFW configuration
+    - name: Install UFW
+      apt:
+        name: ufw
+        state: present
+        update_cache: no
+
+    - name: Set UFW default policies
+      ufw:
+        direction: "{{ item.direction }}"
+        policy: "{{ item.policy }}"
+      loop:
+        - { direction: "incoming", policy: "deny" }
+        - { direction: "outgoing", policy: "allow" }
+
+    - name: Configure UFW rules
+      ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        comment: "{{ item.comment }}"
+      loop:
+        - { port: '22', proto: 'tcp', comment: 'SSH' }
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+        log: yes
+
+    # Prometheus Node Exporter
+    - name: Install Prometheus Node Exporter
+      apt:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: no
+      ignore_errors: true
+
+    - name: Enable and start Prometheus Node Exporter
+      systemd:
+        name: prometheus-node-exporter
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      ignore_errors: true
+
+    - name: Display installation status
+      debug:
+        msg: |
+          ============================================
+          Jibri Setup Complete!
+          ============================================
+
+          Server: {{ ansible_hostname }} ({{ ansible_host }})
+          Jibri nickname: {{ jibri_nick }}
+          Jibri user: {{ jibri_user }}
+
+          Next steps:
+          1. Check jibri status: systemctl status jibri
+          2. Check logs: journalctl -u jibri -f
+          3. Create jibri users in Prosody on {{ jitsi_hostname }}:
+             prosodyctl register {{ jibri_user }} auth.{{ jitsi_domain }} {{ jibri_password }}
+             prosodyctl register {{ recorder_user }} recorder.{{ jitsi_domain }} {{ recorder_password }}

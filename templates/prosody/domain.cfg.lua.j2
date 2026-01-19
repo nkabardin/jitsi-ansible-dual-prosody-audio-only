@@ -1,0 +1,170 @@
+-- Domain configuration for {{ jitsi_domain }}
+-- Jitsi Meet Dual-Prosody Architecture
+
+component_admins_as_room_owners = true
+
+-- Domain mapper options
+muc_mapper_domain_base = "{{ jitsi_domain }}";
+
+-- TURN/STUN external services
+external_service_secret = "{{ turn_secret }}";
+external_services = {
+    { type = "stun", host = "{{ jitsi_domain }}", port = 3478 },
+    { type = "turn", host = "{{ jitsi_domain }}", port = 3478, transport = "udp", secret = true, ttl = 86400, algorithm = "turn" },
+    { type = "turns", host = "{{ jitsi_domain }}", port = 5349, transport = "tcp", secret = true, ttl = 86400, algorithm = "turn" }
+};
+
+cross_domain_bosh = false;
+consider_bosh_secure = true;
+consider_websocket_secure = true;
+
+ssl = {
+    protocol = "tlsv1_2+";
+    ciphers = "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384"
+}
+
+unlimited_jids = {
+    "focus@auth.{{ jitsi_domain }}",
+    "jvb@auth.{{ jitsi_domain }}"
+}
+
+smacks_max_queue_size = 1500;
+
+-- Main VirtualHost for the Jitsi domain
+VirtualHost "{{ jitsi_domain }}"
+    authentication = "internal_hashed"
+    ssl = {
+        key = "/etc/prosody/certs/{{ jitsi_domain }}.key";
+        certificate = "/etc/prosody/certs/{{ jitsi_domain }}.crt";
+    }
+    modules_enabled = {
+        "bosh";
+        "websocket";
+        "smacks";
+        "ping";
+        "external_services";
+        "features_identity";
+        "conference_duration";
+    }
+    c2s_require_encryption = false
+    smacks_max_queue_size = 1500;
+    lobby_muc = "lobby.{{ jitsi_domain }}"
+    breakout_rooms_muc = "breakout.{{ jitsi_domain }}"
+    main_muc = "conference.{{ jitsi_domain }}"
+
+-- Guest VirtualHost (anonymous access)
+VirtualHost "guest.{{ jitsi_domain }}"
+    authentication = "anonymous"
+    c2s_require_encryption = false
+    modules_enabled = {
+        "smacks";
+    }
+
+-- Main MUC component (conference rooms)
+Component "conference.{{ jitsi_domain }}" "muc"
+    restrict_room_creation = true
+    storage = "memory"
+    max_history_messages = 0
+    muc_room_default_history_length = 0
+    modules_enabled = {
+        "muc_hide_all";
+        "muc_meeting_id";
+        "muc_domain_mapper";
+        "muc_rate_limit";
+        "muc_password_whitelist";
+        "av_moderation";
+    }
+    muc_rate_joins = 3
+    muc_rate_leaves = 3
+    smacks_max_queue_size = 1500;
+    muc_max_char_count = 4096
+    muc_max_line_count = 16
+    admins = { "focus@auth.{{ jitsi_domain }}" }
+    muc_password_whitelist = {
+        "focus@auth.{{ jitsi_domain }}"
+    }
+    muc_room_locking = false
+    muc_room_default_public_jids = true
+
+-- Breakout rooms MUC
+Component "breakout.{{ jitsi_domain }}" "muc"
+    restrict_room_creation = true
+    storage = "memory"
+    modules_enabled = {
+        "muc_hide_all";
+        "muc_meeting_id";
+        "muc_domain_mapper";
+        "muc_rate_limit";
+    }
+    admins = { "focus@auth.{{ jitsi_domain }}" }
+    muc_room_locking = false
+    muc_room_default_public_jids = true
+
+-- Internal MUC component
+Component "internal.auth.{{ jitsi_domain }}" "muc"
+    storage = "memory"
+    modules_enabled = {
+        "muc_hide_all";
+        "ping";
+    }
+    admins = { "focus@auth.{{ jitsi_domain }}", "jvb@auth.{{ jitsi_domain }}" }
+    muc_room_locking = false
+    muc_room_default_public_jids = true
+
+-- Authentication VirtualHost
+VirtualHost "auth.{{ jitsi_domain }}"
+    ssl = {
+        key = "/etc/prosody/certs/auth.{{ jitsi_domain }}.key";
+        certificate = "/etc/prosody/certs/auth.{{ jitsi_domain }}.crt";
+    }
+    authentication = "internal_hashed"
+    smacks_hibernation_time = 15;
+
+{% if jibri_enabled | default(false) %}
+-- Recorder VirtualHost (for Jibri)
+VirtualHost "recorder.{{ jitsi_domain }}"
+    modules_enabled = {
+        "smacks";
+    }
+    authentication = "internal_hashed"
+    smacks_max_old_sessions = 2000;
+{% endif %}
+
+-- Proxy to jicofo's user JID
+Component "focus.{{ jitsi_domain }}" "client_proxy"
+    target_address = "focus@auth.{{ jitsi_domain }}"
+
+-- Speaker stats component
+Component "speakerstats.{{ jitsi_domain }}" "speakerstats_component"
+    muc_component = "conference.{{ jitsi_domain }}"
+
+-- End conference component
+Component "endconference.{{ jitsi_domain }}" "end_conference"
+    muc_component = "conference.{{ jitsi_domain }}"
+
+-- AV moderation component
+Component "avmoderation.{{ jitsi_domain }}" "av_moderation_component"
+    muc_component = "conference.{{ jitsi_domain }}"
+
+-- File sharing component
+Component "filesharing.{{ jitsi_domain }}" "filesharing_component"
+    muc_component = "conference.{{ jitsi_domain }}"
+
+-- Lobby MUC
+Component "lobby.{{ jitsi_domain }}" "muc"
+    storage = "memory"
+    restrict_room_creation = true
+    muc_room_locking = false
+    muc_room_default_public_jids = true
+    modules_enabled = {
+        "muc_hide_all";
+        "muc_rate_limit";
+    }
+
+-- Room metadata component
+Component "metadata.{{ jitsi_domain }}" "room_metadata_component"
+    muc_component = "conference.{{ jitsi_domain }}"
+    breakout_rooms_component = "breakout.{{ jitsi_domain }}"
+
+-- Polls component
+Component "polls.{{ jitsi_domain }}" "polls_component"

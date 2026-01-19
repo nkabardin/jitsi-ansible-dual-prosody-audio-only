@@ -1,0 +1,638 @@
+---
+- name: Setup Jitsi Meet server with Dual-Prosody architecture (Audio-Only)
+  hosts: jitsi_servers
+  become: yes
+  gather_facts: yes
+
+  vars:
+    server_ip: "{{ ansible_host | default(ansible_default_ipv4.address | default('127.0.0.1')) }}"
+    prometheus_ip: "{{ monitoring_ip | default('127.0.0.1') }}"
+
+  tasks:
+    - name: Get server local IP address
+      shell: |
+        ip -4 addr show | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | cut -d'/' -f1 | head -1
+      register: local_ip_result
+      changed_when: false
+      failed_when: false
+
+    - name: Set server_local_ip fact
+      set_fact:
+        server_local_ip: "{{ local_ip_result.stdout | default(ansible_default_ipv4.address | default('127.0.0.1')) }}"
+
+    - name: Update package list
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required dependencies
+      apt:
+        name:
+          - gnupg
+          - curl
+          - wget
+          - ca-certificates
+          - software-properties-common
+          - lsb-release
+        state: present
+
+    # Jitsi repository setup
+    - name: Download Jitsi GPG key
+      get_url:
+        url: https://download.jitsi.org/jitsi-key.gpg.key
+        dest: /tmp/jitsi-key.gpg.key
+        mode: '0644'
+
+    - name: Add Jitsi GPG key to system keyring
+      shell: |
+        gpg --dearmor < /tmp/jitsi-key.gpg.key > /usr/share/keyrings/jitsi-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/jitsi-keyring.gpg
+
+    - name: Set permissions for Jitsi keyring
+      file:
+        path: /usr/share/keyrings/jitsi-keyring.gpg
+        mode: '0644'
+        state: file
+
+    - name: Add Jitsi repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/jitsi-keyring.gpg] https://download.jitsi.org stable/"
+        state: present
+        filename: jitsi-stable
+        update_cache: yes
+
+    - name: Clean up temporary Jitsi GPG key file
+      file:
+        path: /tmp/jitsi-key.gpg.key
+        state: absent
+
+    # Prosody repository setup
+    - name: Get distribution codename
+      shell: lsb_release -sc
+      register: distro_codename
+      changed_when: false
+
+    - name: Remove old Prosody repository settings
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/prosody.list
+        - /etc/apt/sources.list.d/prosody.sources
+        - /usr/share/keyrings/prosody-keyring.gpg
+      ignore_errors: true
+
+    - name: Download prosody.sources file
+      get_url:
+        url: "https://prosody.im/downloads/repos/{{ distro_codename.stdout }}/prosody.sources"
+        dest: /etc/apt/sources.list.d/prosody.sources
+        mode: '0644'
+        timeout: 30
+
+    - name: Update package list after adding Prosody repository
+      apt:
+        update_cache: yes
+
+    # Install base packages
+    - name: Install base packages
+      apt:
+        name:
+          - openjdk-17-jre-headless
+          - nginx-full
+          - debconf-utils
+          - luarocks
+          - lua5.4
+        state: present
+        update_cache: no
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+
+    - name: Configure Lua alternatives for Prosody 13.0+
+      shell: |
+        if [ -f /usr/bin/lua5.4 ]; then
+          update-alternatives --install /usr/bin/lua lua-interpreter /usr/bin/lua5.4 100 || true
+          update-alternatives --set lua-interpreter /usr/bin/lua5.4 || true
+        fi
+      args:
+        executable: /bin/bash
+      ignore_errors: true
+      changed_when: false
+
+    # Debconf configuration for non-interactive installation
+    - name: Configure debconf for jicofo
+      debconf:
+        name: "jicofo"
+        question: "jitsi-videobridge/jvb-hostname"
+        value: "localhost"
+        vtype: "string"
+
+    - name: Configure debconf for jitsi-videobridge2
+      debconf:
+        name: "jitsi-videobridge2"
+        question: "jitsi-videobridge/jvb-hostname"
+        value: "localhost"
+        vtype: "string"
+
+    - name: Configure debconf for jitsi-meet-web-config
+      debconf:
+        name: "jitsi-meet-web-config"
+        question: "jitsi-meet/cert-choice"
+        value: "Generate a new self-signed certificate (You will later get a chance to obtain a Let's Encrypt certificate)"
+        vtype: "select"
+
+    - name: Configure debconf for jitsi-meet-prosody
+      debconf:
+        name: "jitsi-meet-prosody"
+        question: "jitsi-meet-prosody/jvb-hostname"
+        value: "localhost"
+        vtype: "string"
+
+    # Prepare Prosody configuration
+    - name: Create Prosody directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+        recurse: true
+      loop:
+        - "/etc/prosody/conf.avail"
+        - "/etc/prosody/conf.d"
+        - "/etc/prosody/firewall"
+
+    - name: Deploy main Prosody configuration
+      template:
+        src: "{{ playbook_dir }}/templates/prosody/prosody.cfg.lua.j2"
+        dest: "/etc/prosody/prosody.cfg.lua"
+        mode: '0644'
+
+    - name: Deploy domain-specific Prosody configuration
+      template:
+        src: "{{ playbook_dir }}/templates/prosody/domain.cfg.lua.j2"
+        dest: "/etc/prosody/conf.avail/{{ jitsi_domain }}.cfg.lua"
+        mode: '0644'
+
+    - name: Create symlink for domain config in conf.d
+      file:
+        src: "/etc/prosody/conf.avail/{{ jitsi_domain }}.cfg.lua"
+        dest: "/etc/prosody/conf.d/{{ jitsi_domain }}.cfg.lua"
+        state: link
+
+    - name: Check if localhost.cfg.lua exists
+      stat:
+        path: /etc/prosody/conf.avail/localhost.cfg.lua
+      register: localhost_avail_exists
+
+    - name: Create localhost.cfg.lua (required for jitsi-meet-prosody postinst)
+      copy:
+        dest: /etc/prosody/conf.avail/localhost.cfg.lua
+        content: |
+          VirtualHost "localhost"
+              authentication = "internal_plain"
+              modules_enabled = {
+                  "ping";
+              }
+        mode: '0644'
+      when: not localhost_avail_exists.stat.exists
+
+    - name: Create symlink for localhost.cfg.lua in conf.d
+      file:
+        src: /etc/prosody/conf.avail/localhost.cfg.lua
+        dest: /etc/prosody/conf.d/localhost.cfg.lua
+        state: link
+
+    - name: Deploy Prosody firewall scripts
+      copy:
+        src: "{{ playbook_dir }}/templates/prosody/firewall/{{ item }}"
+        dest: "/etc/prosody/firewall/{{ item }}"
+        mode: '0644'
+      loop:
+        - "priority-and-antiflood.pfw"
+        - "jvb_muc_presence_filter.pfw"
+      ignore_errors: true
+
+    # Install Prosody
+    - name: Complete configuration of interrupted packages
+      command: dpkg --configure --force-confold -a
+      failed_when: false
+      changed_when: false
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+      async: 120
+      poll: 5
+
+    - name: Unhold Prosody if held
+      command: apt-mark unhold prosody
+      ignore_errors: true
+      changed_when: false
+
+    - name: Install Prosody from official repository
+      apt:
+        name: prosody
+        state: latest
+        update_cache: yes
+        lock_timeout: 300
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+      register: prosody_install
+      ignore_errors: true
+
+    - name: Complete Prosody configuration if install failed
+      command: dpkg --configure --force-confold prosody
+      failed_when: false
+      changed_when: false
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+      when: prosody_install.failed | default(false)
+
+    - name: Check Prosody configuration
+      command: prosodyctl check config || true
+      register: prosody_check_result
+      changed_when: false
+      failed_when: false
+      ignore_errors: true
+
+    - name: Start Prosody
+      systemd:
+        name: prosody
+        state: started
+        enabled: yes
+      ignore_errors: true
+
+    # Setup Prosody-JVB (separate instance for JVB/Jicofo)
+    - name: Create Prosody-JVB directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+        owner: prosody
+        group: prosody
+        recurse: true
+      loop:
+        - "/etc/prosody-jvb"
+        - "/etc/prosody-jvb/firewall"
+        - "/etc/prosody-jvb/certs"
+        - "/var/log/prosody-jvb"
+
+    - name: Deploy Prosody-JVB configuration
+      template:
+        src: "{{ playbook_dir }}/templates/prosody-jvb/prosody.cfg.lua.j2"
+        dest: "/etc/prosody-jvb/prosody.cfg.lua"
+        mode: '0644'
+        owner: prosody
+        group: prosody
+
+    - name: Deploy Prosody-JVB firewall scripts
+      copy:
+        src: "{{ playbook_dir }}/templates/prosody/firewall/{{ item }}"
+        dest: "/etc/prosody-jvb/firewall/{{ item }}"
+        mode: '0644'
+        owner: prosody
+        group: prosody
+      loop:
+        - "priority-and-antiflood.pfw"
+        - "jvb_muc_presence_filter.pfw"
+      ignore_errors: true
+
+    - name: Create systemd unit file for Prosody-JVB
+      copy:
+        dest: /etc/systemd/system/prosody-jvb.service
+        content: |
+          [Unit]
+          Description=Prosody (JVB/Jicofo instance)
+          After=network.target
+          Wants=network-online.target
+
+          [Service]
+          User=prosody
+          Group=prosody
+          Environment=PROSODY_CONFIG=/etc/prosody-jvb/prosody.cfg.lua
+          ExecStart=/usr/bin/prosody -F --config /etc/prosody-jvb/prosody.cfg.lua
+          Restart=on-failure
+          RuntimeDirectory=prosody-jvb
+          LimitNOFILE=65536
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+      register: prosody_jvb_service_file
+
+    - name: Reload systemd after creating unit file
+      systemd:
+        daemon_reload: yes
+      when: prosody_jvb_service_file.changed
+
+    - name: Create runtime directory for Prosody-JVB
+      file:
+        path: /run/prosody-jvb
+        state: directory
+        mode: '0755'
+        owner: prosody
+        group: prosody
+
+    - name: Enable and start Prosody-JVB
+      systemd:
+        name: prosody-jvb
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    # Install Jitsi components
+    - name: Check installed jicofo version
+      shell: dpkg -l jicofo | grep '^ii' | awk '{print $3}' || echo "not_installed"
+      register: installed_jicofo_version
+      changed_when: false
+      failed_when: false
+
+    - name: Install jicofo version {{ jicofo_version }}
+      apt:
+        name: "jicofo={{ jicofo_version }}"
+        state: present
+        update_cache: yes
+        force: yes
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+      when: installed_jicofo_version.stdout != jicofo_version or installed_jicofo_version.stdout == "not_installed"
+
+    - name: Hold jicofo version
+      command: apt-mark hold jicofo
+      changed_when: true
+      failed_when: false
+
+    - name: Check installed jitsi-videobridge2 version
+      shell: dpkg -l jitsi-videobridge2 | grep '^ii' | awk '{print $3}' || echo "not_installed"
+      register: installed_videobridge_version
+      changed_when: false
+      failed_when: false
+
+    - name: Install jitsi-videobridge2 version {{ videobridge_version }}
+      apt:
+        name: "jitsi-videobridge2={{ videobridge_version }}"
+        state: present
+        update_cache: yes
+        force: yes
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+      when: installed_videobridge_version.stdout != videobridge_version or installed_videobridge_version.stdout == "not_installed"
+
+    - name: Hold jitsi-videobridge2 version
+      command: apt-mark hold jitsi-videobridge2
+      changed_when: true
+      failed_when: false
+
+    - name: Check installed jitsi-meet version
+      shell: dpkg -l jitsi-meet | grep '^ii' | awk '{print $3}' || echo "not_installed"
+      register: installed_jitsi_meet_version
+      changed_when: false
+      failed_when: false
+
+    - name: Install jitsi-meet version {{ jitsi_meet_version }}
+      shell: |
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get install -y jitsi-meet={{ jitsi_meet_version }} 2>&1 | tee /tmp/jitsi-install.log || true
+        if grep -q "The given hostname does not exist" /tmp/jitsi-install.log; then
+          echo "POSTINST_ERROR_DETECTED"
+          exit 0
+        fi
+        exit 0
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+      when: installed_jitsi_meet_version.stdout != jitsi_meet_version or installed_jitsi_meet_version.stdout == "not_installed"
+      failed_when: false
+      register: jitsi_meet_install_result
+      changed_when: "'POSTINST_ERROR_DETECTED' not in jitsi_meet_install_result.stdout"
+
+    - name: Hold jitsi-meet version
+      command: apt-mark hold jitsi-meet
+      changed_when: true
+      failed_when: false
+
+    # Deploy Jitsi component configurations
+    - name: Create Jitsi configuration directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "/etc/jitsi/jicofo"
+        - "/etc/jitsi/videobridge"
+        - "/etc/jitsi/meet"
+
+    - name: Deploy Jicofo configuration
+      template:
+        src: "{{ playbook_dir }}/templates/jitsi/jicofo/jicofo.conf.j2"
+        dest: "/etc/jitsi/jicofo/jicofo.conf"
+        mode: '0644'
+
+    - name: Deploy Videobridge configuration
+      template:
+        src: "{{ playbook_dir }}/templates/jitsi/videobridge/jvb.conf.j2"
+        dest: "/etc/jitsi/videobridge/jvb.conf"
+        mode: '0644'
+
+    - name: Deploy Videobridge sip-communicator.properties
+      template:
+        src: "{{ playbook_dir }}/templates/jitsi/videobridge/sip-communicator.properties.j2"
+        dest: "/etc/jitsi/videobridge/sip-communicator.properties"
+        mode: '0644'
+
+    - name: Deploy Jitsi Meet config.js
+      template:
+        src: "{{ playbook_dir }}/templates/jitsi/meet/config.js.j2"
+        dest: "/etc/jitsi/meet/{{ jitsi_domain }}-config.js"
+        mode: '0644'
+
+    # Complete package configuration
+    - name: Complete configuration of installed packages
+      command: dpkg --configure -a
+      failed_when: false
+      changed_when: false
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+
+    # Setup UFW firewall
+    - name: Install UFW
+      apt:
+        name: ufw
+        state: present
+        update_cache: no
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+
+    - name: Set UFW default policies
+      ufw:
+        direction: "{{ item.direction }}"
+        policy: "{{ item.policy }}"
+      loop:
+        - { direction: "incoming", policy: "deny" }
+        - { direction: "outgoing", policy: "allow" }
+
+    - name: Configure UFW rules for open ports
+      ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        comment: "{{ item.comment | default('') }}"
+      loop:
+        - { port: '22', proto: 'tcp', comment: 'SSH' }
+        - { port: '80', proto: 'tcp', comment: 'HTTP' }
+        - { port: '443', proto: 'tcp', comment: 'HTTPS' }
+        - { port: '10000', proto: 'udp', comment: 'Jitsi RTP' }
+        - { port: '5347', proto: 'tcp', comment: 'Jitsi WebSocket' }
+        - { port: '4443', proto: 'tcp', comment: 'Jitsi TURN' }
+        - { port: '4096', proto: 'udp', comment: 'Jitsi TURN UDP' }
+        - { port: '5222', proto: 'tcp', comment: 'XMPP client connections' }
+        - { port: '15222', proto: 'tcp', comment: 'XMPP client connections (prosody-jvb)' }
+        - { port: '9090', proto: 'tcp', comment: 'Monitoring' }
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+        log: yes
+
+    # Install Prometheus Node Exporter
+    - name: Install Prometheus Node Exporter
+      apt:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: no
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+      ignore_errors: true
+
+    - name: Enable and start Prometheus Node Exporter
+      systemd:
+        name: prometheus-node-exporter
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      ignore_errors: true
+
+    # SSL certificate setup
+    - name: Check if Let's Encrypt certificate exists
+      stat:
+        path: "/etc/letsencrypt/live/{{ jitsi_domain }}/fullchain.pem"
+      register: cert_exists
+
+    - name: Create minimal HTTP-only nginx config for certificate acquisition
+      template:
+        src: "{{ playbook_dir }}/templates/nginx/jitsi-http.conf.j2"
+        dest: "/etc/nginx/sites-available/{{ jitsi_domain }}.conf"
+        mode: '0644'
+      when: not cert_exists.stat.exists
+
+    - name: Enable nginx config
+      file:
+        src: "/etc/nginx/sites-available/{{ jitsi_domain }}.conf"
+        dest: "/etc/nginx/sites-enabled/{{ jitsi_domain }}.conf"
+        state: link
+      when: not cert_exists.stat.exists
+
+    - name: Test and reload nginx
+      shell: nginx -t && systemctl reload nginx
+      when: not cert_exists.stat.exists
+      register: nginx_reload_result
+      failed_when: nginx_reload_result.rc != 0
+
+    - name: Install certbot
+      apt:
+        name:
+          - certbot
+          - python3-certbot-nginx
+        state: present
+        update_cache: no
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+      ignore_errors: true
+
+    - name: Obtain Let's Encrypt certificate
+      command: >
+        certbot certonly
+        --nginx
+        --non-interactive
+        --agree-tos
+        --email {{ admin_email }}
+        --domains {{ jitsi_domain }}
+        --keep-until-expiring
+      register: certbot_result
+      when: not cert_exists.stat.exists
+      changed_when: "'Congratulations' in certbot_result.stdout or 'Certificate not yet due for renewal' in certbot_result.stdout"
+      failed_when: false
+
+    - name: Deploy full nginx configuration
+      template:
+        src: "{{ playbook_dir }}/templates/nginx/jitsi.conf.j2"
+        dest: "/etc/nginx/sites-available/{{ jitsi_domain }}.conf"
+        mode: '0644'
+
+    - name: Enable nginx configuration
+      file:
+        src: "/etc/nginx/sites-available/{{ jitsi_domain }}.conf"
+        dest: "/etc/nginx/sites-enabled/{{ jitsi_domain }}.conf"
+        state: link
+
+    - name: Test and reload nginx
+      shell: nginx -t && systemctl reload nginx
+      register: nginx_final_reload
+      failed_when: nginx_final_reload.rc != 0
+
+    # Configure /etc/hosts
+    - name: Update /etc/hosts
+      copy:
+        dest: /etc/hosts
+        content: |
+          127.0.0.1 localhost.localdomain localhost
+
+          {{ server_ip }} {{ jitsi_domain }}
+          {{ server_ip }} {{ tech_domain }} muc.{{ tech_domain }}
+          {{ server_ip }} guest.{{ jitsi_domain }} auth.{{ jitsi_domain }} internal.auth.{{ jitsi_domain }} focus.{{ jitsi_domain }} conference.{{ jitsi_domain }}
+        mode: '0644'
+        backup: yes
+
+    # Create Prosody users
+    - name: Register focus user in Prosody
+      shell: |
+        prosodyctl --config /etc/prosody/prosody.cfg.lua register focus auth.{{ jitsi_domain }} {{ jicofo_password }}
+      ignore_errors: true
+      changed_when: false
+
+    - name: Register jvb user in Prosody-JVB
+      shell: |
+        prosodyctl --config /etc/prosody-jvb/prosody.cfg.lua register {{ jvb_user }} {{ tech_domain }} {{ jvb_password }}
+      ignore_errors: true
+      changed_when: false
+
+    - name: Register focus user in Prosody-JVB
+      shell: |
+        prosodyctl --config /etc/prosody-jvb/prosody.cfg.lua register focus {{ tech_domain }} {{ jicofo_password }}
+      ignore_errors: true
+      changed_when: false
+
+    # Restart services
+    - name: Restart Jitsi services
+      systemd:
+        name: "{{ item }}"
+        state: restarted
+        enabled: yes
+      loop:
+        - prosody
+        - prosody-jvb
+        - jicofo
+        - jitsi-videobridge2
+      ignore_errors: true
+
+    - name: Display installation status
+      debug:
+        msg: |
+          ============================================
+          Jitsi Meet Installation Complete!
+          ============================================
+
+          Domain: {{ jitsi_domain }}
+          Tech Domain: {{ tech_domain }}
+          Server IP: {{ ansible_host }}
+
+          Next steps:
+          1. Check service status: systemctl status prosody jicofo jitsi-videobridge2 nginx
+          2. Check Prosody config: prosodyctl check config
+          3. Access Jitsi Meet at: https://{{ jitsi_domain }}

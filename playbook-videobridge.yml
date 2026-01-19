@@ -1,0 +1,227 @@
+---
+- name: Setup additional Jitsi Videobridge servers
+  hosts: videobridge_servers
+  become: yes
+  gather_facts: yes
+
+  vars:
+    server_ip: "{{ ansible_host | default(ansible_default_ipv4.address | default('127.0.0.1')) }}"
+    prometheus_ip: "{{ monitoring_ip | default('127.0.0.1') }}"
+
+  tasks:
+    - name: Get server local IP address
+      shell: |
+        ip -4 addr show | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | cut -d'/' -f1 | head -1
+      register: local_ip_result
+      changed_when: false
+      failed_when: false
+
+    - name: Set server_local_ip fact
+      set_fact:
+        server_local_ip: "{{ local_ip_result.stdout | default(ansible_default_ipv4.address | default('127.0.0.1')) }}"
+
+    - name: Update package list
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required dependencies
+      apt:
+        name:
+          - gnupg
+          - curl
+          - wget
+          - ca-certificates
+          - software-properties-common
+          - lsb-release
+          - openjdk-17-jre-headless
+        state: present
+        update_cache: no
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+
+    # Jitsi repository setup
+    - name: Download Jitsi GPG key
+      get_url:
+        url: https://download.jitsi.org/jitsi-key.gpg.key
+        dest: /tmp/jitsi-key.gpg.key
+        mode: '0644'
+
+    - name: Add Jitsi GPG key to system keyring
+      shell: |
+        gpg --dearmor < /tmp/jitsi-key.gpg.key > /usr/share/keyrings/jitsi-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/jitsi-keyring.gpg
+
+    - name: Set permissions for Jitsi keyring
+      file:
+        path: /usr/share/keyrings/jitsi-keyring.gpg
+        mode: '0644'
+        state: file
+
+    - name: Add Jitsi repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/jitsi-keyring.gpg] https://download.jitsi.org stable/"
+        state: present
+        filename: jitsi-stable
+        update_cache: yes
+
+    - name: Clean up temporary Jitsi GPG key file
+      file:
+        path: /tmp/jitsi-key.gpg.key
+        state: absent
+
+    # Debconf configuration
+    - name: Configure debconf for jitsi-videobridge2
+      debconf:
+        name: "jitsi-videobridge2"
+        question: "jitsi-videobridge/jvb-hostname"
+        value: "localhost"
+        vtype: "string"
+
+    # Install jitsi-videobridge2
+    - name: Check installed jitsi-videobridge2 version
+      shell: dpkg -l jitsi-videobridge2 | grep '^ii' | awk '{print $3}' || echo "not_installed"
+      register: installed_videobridge_version
+      changed_when: false
+      failed_when: false
+
+    - name: Install jitsi-videobridge2 version {{ videobridge_version }}
+      apt:
+        name: "jitsi-videobridge2={{ videobridge_version }}"
+        state: present
+        update_cache: yes
+        force: yes
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+      when: installed_videobridge_version.stdout != videobridge_version or installed_videobridge_version.stdout == "not_installed"
+
+    - name: Hold jitsi-videobridge2 version
+      command: apt-mark hold jitsi-videobridge2
+      changed_when: true
+      failed_when: false
+
+    # Deploy Videobridge configurations
+    - name: Create Jitsi Videobridge configuration directory
+      file:
+        path: "/etc/jitsi/videobridge"
+        state: directory
+        mode: '0755'
+
+    - name: Deploy Videobridge configuration
+      template:
+        src: "{{ playbook_dir }}/templates/jitsi/videobridge/jvb.conf.j2"
+        dest: "/etc/jitsi/videobridge/jvb.conf"
+        mode: '0644'
+
+    - name: Deploy Videobridge sip-communicator.properties
+      template:
+        src: "{{ playbook_dir }}/templates/jitsi/videobridge/sip-communicator.properties.j2"
+        dest: "/etc/jitsi/videobridge/sip-communicator.properties"
+        mode: '0644'
+
+    # Complete package configuration
+    - name: Complete configuration of installed packages
+      command: dpkg --configure -a
+      failed_when: false
+      changed_when: false
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+
+    # Setup UFW firewall
+    - name: Install UFW
+      apt:
+        name: ufw
+        state: present
+        update_cache: no
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+
+    - name: Set UFW default policies
+      ufw:
+        direction: "{{ item.direction }}"
+        policy: "{{ item.policy }}"
+      loop:
+        - { direction: "incoming", policy: "deny" }
+        - { direction: "outgoing", policy: "allow" }
+
+    - name: Configure UFW rules for Videobridge
+      ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        comment: "{{ item.comment | default('') }}"
+      loop:
+        - { port: '22', proto: 'tcp', comment: 'SSH' }
+        - { port: '10000', proto: 'udp', comment: 'Jitsi RTP' }
+        - { port: '4443', proto: 'tcp', comment: 'Jitsi TURN' }
+        - { port: '4096', proto: 'udp', comment: 'Jitsi TURN UDP' }
+        - { port: '15222', proto: 'tcp', comment: 'XMPP client connections (prosody-jvb)' }
+        - { port: '9090', proto: 'tcp', comment: 'Monitoring' }
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+        log: yes
+
+    # Install Prometheus Node Exporter
+    - name: Install Prometheus Node Exporter
+      apt:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: no
+      environment:
+        DEBIAN_FRONTEND: "noninteractive"
+      ignore_errors: true
+
+    - name: Enable and start Prometheus Node Exporter
+      systemd:
+        name: prometheus-node-exporter
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      ignore_errors: true
+
+    # Configure /etc/hosts
+    - name: Update /etc/hosts
+      copy:
+        dest: /etc/hosts
+        content: |
+          127.0.0.1 localhost.localdomain localhost
+
+          {{ jitsi_server_ip }} {{ tech_domain }} muc.{{ tech_domain }}
+        mode: '0644'
+        backup: yes
+
+    # Restart jitsi-videobridge2
+    - name: Restart jitsi-videobridge2
+      systemd:
+        name: jitsi-videobridge2
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Check jitsi-videobridge2 status
+      systemd:
+        name: jitsi-videobridge2
+      register: videobridge_status
+
+    - name: Display installation status
+      debug:
+        msg: |
+          ============================================
+          Jitsi Videobridge Setup Complete!
+          ============================================
+
+          Server: {{ inventory_hostname }}
+          IP Address: {{ ansible_host }}
+          Version: {{ videobridge_version }}
+          Relay ID: {{ jvb_relay_id }}
+          Region: {{ jvb_region }}
+
+          Service Status: {{ videobridge_status.status.ActiveState }}
+
+          Next steps:
+          1. Check status: systemctl status jitsi-videobridge2
+          2. Check logs: journalctl -u jitsi-videobridge2 -n 50
+          3. Verify XMPP connection to main server

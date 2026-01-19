@@ -1,0 +1,92 @@
+-- Prosody-JVB Configuration
+-- Separate Prosody instance for JVB/Jicofo communication
+-- Listens on port 15222 to separate internal traffic from client traffic
+-- This is the key to scaling Jitsi for 300+ concurrent users
+
+c2s_ports = { 15222 }
+s2s_ports = { }      -- disable s2s for this instance
+http_ports = { }     -- disable http
+https_ports = { }    -- disable https
+
+network_backend = "epoll"
+network_settings = {
+    tcp_backlog = 1024;
+}
+admins = { }
+plugin_paths = {
+    "/usr/local/lib/prosody/modules",
+    "/usr/share/jitsi-meet/prosody-plugins/"
+}
+
+modules_enabled = {
+    "disco";
+    "roster";
+    "saslauth";
+    "tls";
+    "blocklist";
+    "bookmarks";
+    "carbons";
+    "pep";
+    "private";
+    "smacks";
+    "vcard4";
+    "vcard_legacy";
+    "csi_simple";
+    "invites";
+    "invites_adhoc";
+    "invites_register";
+    "firewall";
+    "ping";
+    "register";
+    "time";
+    "uptime";
+    "version";
+    "admin_adhoc";
+    "admin_shell";
+    "posix";
+}
+
+firewall_scripts = {
+    "/etc/prosody-jvb/firewall/jvb_muc_presence_filter.pfw"
+}
+
+modules_disabled = {
+}
+pidfile = "/run/prosody-jvb/prosody.pid";
+
+authentication = "internal_hashed"
+
+archive_expires_after = "1w"
+log = {
+    info = "/var/log/prosody-jvb/prosody.log";
+    error = "/var/log/prosody-jvb/prosody.err";
+    { levels = { "error" }; to = "syslog"; };
+}
+certificates = "certs"
+
+component_admins_as_room_owners = true
+ssl = {
+    protocol = "tlsv1_2+";
+    ciphers = "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384"
+}
+
+
+-- Tech domain VirtualHost for JVB/Jicofo
+VirtualHost "{{ tech_domain }}"
+    authentication = "internal_hashed"
+    modules_enabled = {
+        "smacks";
+        "ping";
+    }
+    ssl = {
+        key = "/etc/prosody-jvb/certs/{{ tech_domain }}.key";
+        certificate = "/etc/prosody-jvb/certs/{{ tech_domain }}.crt";
+    }
+
+-- MUC for JVB communication (brewery)
+Component "muc.{{ tech_domain }}" "muc"
+    storage = "memory"
+    modules_enabled = { "muc_hide_all"; "ping"; }
+    admins = { "focus@{{ tech_domain }}", "jvb@{{ tech_domain }}" }
+    muc_room_locking = false
+    muc_room_default_public_jids = true

@@ -1,0 +1,17 @@
+# Jitsi Videobridge SIP Communicator Properties
+# Audio-only optimization settings
+
+# Disable video support for audio-only mode
+org.jitsi.videobridge.DISABLE_VIDEO_SUPPORT=true
+org.jitsi.videobridge.ENABLE_SVC=false
+org.jitsi.videobridge.ENABLE_RED=false
+
+# ICE/NAT configuration
+org.ice4j.ice.harvest.DISABLE_AWS_HARVESTER=true
+org.ice4j.ice.harvest.NAT_HARVESTER_LOCAL_ADDRESS={{ server_local_ip }}
+org.ice4j.ice.harvest.NAT_HARVESTER_PUBLIC_ADDRESS={{ server_ip }}
+
+# Statistics
+org.jitsi.videobridge.ENABLE_STATISTICS=true
+org.jitsi.videobridge.STATISTICS_TRANSPORT=muc,colibri
+org.jitsi.videobridge.STATISTICS_INTERVAL=2000

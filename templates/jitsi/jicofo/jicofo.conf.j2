@@ -1,0 +1,75 @@
+# Jicofo HOCON configuration for Dual-Prosody Architecture
+# See reference.conf in /usr/share/jicofo/jicofo.jar for available options
+
+jicofo {
+  xmpp {
+    # Client connection to main Prosody (port 5222)
+    # For client-facing XMPP traffic
+    client {
+      hostname = localhost
+      port = 5222
+      client-proxy = "focus.{{ jitsi_domain }}"
+      xmpp-domain = "{{ jitsi_domain }}"
+      domain = "auth.{{ jitsi_domain }}"
+      username = "focus"
+      password = "{{ jicofo_password }}"
+      disable-certificate-verification = true
+    }
+
+    # Service connection to Prosody-JVB (port 15222)
+    # For JVB/Jicofo internal communication
+    service {
+      enabled = true
+      hostname = localhost
+      port = 15222
+      domain = "{{ tech_domain }}"
+      username = "focus"
+      password = "{{ jicofo_password }}"
+      disable-certificate-verification = true
+    }
+
+{% if jibri_enabled | default(false) %}
+    trusted-domains: [ "recorder.{{ jitsi_domain }}" ]
+{% endif %}
+  }
+
+  authentication {
+    enabled = true
+    type = XMPP
+    login-url = "auth.{{ jitsi_domain }}"
+  }
+
+  conference {
+    # Audio-only optimization: disable video in Jicofo
+    enable-video = false
+    use-ssrc-rewriting = true
+  }
+
+{% if jibri_enabled | default(false) %}
+  jibri {
+    brewery-jid = "JibriBrewery@internal.auth.{{ jitsi_domain }}"
+    pending-timeout = 90 seconds
+    num-retries = 3
+    single-use-mode = false
+  }
+{% endif %}
+
+  octo {
+    id = "1"
+    enabled = true
+    bind-address = "0.0.0.0"
+    bind-port = 4096
+    public-address = "{{ server_ip }}"
+    relay-type = "muc"
+  }
+
+  bridge {
+    stress-threshold = 0.4
+    max-bridge-participants = {{ max_bridge_participants | default(220) }}
+    # JVB brewery on tech domain via Prosody-JVB
+    brewery-jid = "{{ jvb_xmpp_muc_jids }}"
+    selection-strategy = "RegionBasedBridgeSelectionStrategy"
+    preferred-regions = [ "{{ jvb_region }}" ]
+    xmpp-connection-name = Service
+  }
+}
